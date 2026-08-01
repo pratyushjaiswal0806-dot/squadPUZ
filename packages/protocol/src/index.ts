@@ -1,0 +1,1 @@
+export type RealtimeProtocolMessage = Record<string, unknown>;
