@@ -2,7 +2,7 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { createApp } from "./app.js";
 
-const port = Number(process.env.PORT ?? 3001);
+const port = Number(process.env.PORT ?? 8080);
 const app = createApp();
 const server = http.createServer(app);
 const webSocketServer = new WebSocketServer({ server });
