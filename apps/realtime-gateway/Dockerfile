@@ -20,6 +20,6 @@ RUN npm install --omit=dev
 
 COPY --from=build /app/dist ./dist
 
-EXPOSE 3001
+EXPOSE 8080
 
 CMD ["node", "dist/server.js"]
