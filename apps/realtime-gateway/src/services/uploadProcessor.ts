@@ -170,8 +170,10 @@ export async function processUploadWorker(options: ProcessUploadOptions): Promis
       pieces
     };
   } catch (err) {
-    // Partial S3 asset cleanup on failure
+    // Partial asset and staged upload cleanup on failure
     await storage.deletePrefix(basePrefix).catch(() => {});
+    await storage.deleteObject(stagedKey).catch(() => {});
+    await redis.del(uploadKey).catch(() => {});
     throw err;
   }
 }

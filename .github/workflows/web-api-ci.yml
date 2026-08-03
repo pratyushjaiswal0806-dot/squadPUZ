@@ -7,11 +7,14 @@ on:
 jobs:
   web:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run lint --workspace apps/web
@@ -20,13 +23,17 @@ jobs:
 
   api:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run lint --workspace apps/api
       - run: npm run typecheck --workspace apps/api
+      - run: npm run test --workspace apps/api
       - run: npm run build --workspace apps/api
