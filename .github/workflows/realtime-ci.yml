@@ -29,12 +29,12 @@ jobs:
 
       - run: npm ci
 
-      # Enable this after Phase 3 creates the .proto files
-      # - run: npm run generate --workspace packages/protocol
+      - run: npm run proto:generate --workspace packages/protocol
 
       - run: npm run lint --workspace apps/realtime-gateway
       - run: npm run typecheck --workspace apps/realtime-gateway
       - run: npm run test --workspace apps/realtime-gateway --if-present
+      - run: npm run build --workspace packages/protocol
       - run: npm run build --workspace apps/realtime-gateway
 
-      - run: docker build -t squadpuzzle-realtime-gateway ./apps/realtime-gateway
+      - run: docker build -t squadpuzzle-realtime-gateway -f apps/realtime-gateway/Dockerfile .
