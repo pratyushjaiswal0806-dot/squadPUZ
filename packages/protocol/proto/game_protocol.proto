@@ -1,0 +1,162 @@
+syntax = "proto3";
+package squadpuzzle;
+
+message ConnectIntent {
+  string room_code = 1;
+  string session_token = 2;
+}
+
+message ClaimPieceIntent {
+  string piece_id = 1;
+  string client_message_id = 2;
+}
+
+message MovePieceIntent {
+  string piece_id = 1;
+  sint32 position_x = 2;
+  sint32 position_y = 3;
+  uint64 client_timestamp = 4;
+}
+
+message ReleasePieceIntent {
+  string piece_id = 1;
+  string client_message_id = 2;
+}
+
+message HeartbeatIntent {
+}
+
+message ReconnectSyncIntent {
+  string client_message_id = 1;
+}
+
+message LeaveRoomIntent {
+  string client_message_id = 1;
+}
+
+message PieceLockedEvent {
+  string piece_id = 1;
+  string player_session_id = 2;
+  string player_name = 3;
+  string display_disambiguator = 4;
+  uint32 z_index = 5;
+}
+
+message RoomMovementTick {
+  uint64 tick_id = 1;
+  repeated MovePieceIntent moves = 2;
+}
+
+message PiecePlacedEvent {
+  string piece_id = 1;
+  sint32 position_x = 2;
+  sint32 position_y = 3;
+  string player_session_id = 4;
+  bool is_correct_position = 5;
+  uint64 placed_at = 6;
+}
+
+message PieceReleasedEvent {
+  string piece_id = 1;
+  sint32 position_x = 2;
+  sint32 position_y = 3;
+  string release_reason = 4;
+}
+
+message PlayerJoinedEvent {
+  string player_session_id = 1;
+  string player_name = 2;
+  string display_disambiguator = 3;
+  uint32 player_count = 4;
+}
+
+message PlayerLeftEvent {
+  string player_session_id = 1;
+  string reason = 2;
+  uint64 grace_period_expiry = 3;
+}
+
+message RoomCompletedEvent {
+  uint64 solve_time_ms = 1;
+  uint64 completed_at = 2;
+}
+
+message RoomExpiredEvent {
+  uint64 expired_at = 1;
+}
+
+message RoomExpiringSoonEvent {
+  uint64 expires_at = 1;
+  uint64 remaining_ms = 2;
+}
+
+message ErrorEvent {
+  string code = 1;
+  string message = 2;
+  string context_piece_id = 3;
+}
+
+message PieceState {
+  string piece_id = 1;
+  sint32 current_position_x = 2;
+  sint32 current_position_y = 3;
+  uint32 z_index = 4;
+  bool placed = 5;
+  string locked_by_session_id = 6;
+}
+
+message PlayerState {
+  string session_id = 1;
+  string display_name = 2;
+  string display_disambiguator = 3;
+  string connection_state = 4;
+}
+
+message LockState {
+  string piece_id = 1;
+  string locked_by_session_id = 2;
+  string lock_state = 3;
+}
+
+message RoomStateSnapshot {
+  uint64 last_event_id = 1;
+  uint32 grid_size = 2;
+  uint32 piece_count = 3;
+  uint32 placed_piece_count = 4;
+  bool completed = 5;
+  uint64 solve_time_ms = 6;
+  string base_image_url = 7;
+  string mask_metadata_url = 8;
+  repeated PieceState pieces = 9;
+  repeated PlayerState players = 10;
+  repeated LockState locks = 11;
+}
+
+message GameMessage {
+  uint32 schema_version = 1;
+  string room_id = 2;
+  uint64 event_id = 3;
+  uint64 server_time = 4;
+
+  oneof payload {
+    ConnectIntent connect_intent = 10;
+    ClaimPieceIntent claim_piece_intent = 11;
+    MovePieceIntent move_piece_intent = 12;
+    ReleasePieceIntent release_piece_intent = 13;
+    HeartbeatIntent heartbeat_intent = 14;
+    ReconnectSyncIntent reconnect_sync_intent = 15;
+    LeaveRoomIntent leave_room_intent = 16;
+
+    PieceLockedEvent piece_locked_event = 20;
+    RoomMovementTick room_movement_tick = 21;
+    PiecePlacedEvent piece_placed_event = 22;
+    PieceReleasedEvent piece_released_event = 23;
+    PlayerJoinedEvent player_joined_event = 24;
+    PlayerLeftEvent player_left_event = 25;
+    RoomCompletedEvent room_completed_event = 26;
+    RoomExpiredEvent room_expired_event = 27;
+    RoomExpiringSoonEvent room_expiring_soon_event = 30;
+    ErrorEvent error_event = 28;
+    RoomStateSnapshot room_state_snapshot = 29;
+  }
+}

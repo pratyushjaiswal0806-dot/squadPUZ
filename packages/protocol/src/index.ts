@@ -1,1 +1,1 @@
-export type RealtimeProtocolMessage = Record<string, unknown>;
+export * from "./game_protocol.js";
