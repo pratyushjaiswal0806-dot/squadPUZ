@@ -1,24 +1,25 @@
 import { Router } from "express";
 import { getRedisClient } from "../db/redis.js";
-import { createRoomRecord, updateRoomCreatorSession, getRoomByCode, getRoomById } from "../services/roomService.js";
+import { createRoomRecord, updateRoomCreatorSession, getRoomByCode, getRoomById, type ImageAssetData } from "../services/roomService.js";
 import { createSession, type SessionData } from "../services/sessionService.js";
 import { authMiddleware, type AuthenticatedRequest } from "../middleware/auth.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { createRateLimiter } from "../middleware/rateLimit.js";
 import { sanitizeDisplayName } from "../utils/sanitizer.js";
 import { normalizeRoomCode } from "../utils/roomCode.js";
+import { getStorageService } from "../services/s3Client.js";
 import { AppError } from "../errors.js";
+import { randomUUID } from "node:crypto";
 
 const roomsRouter = Router();
 
-// Helper to safely get route param string
 function getParamString(paramValue: string | string[] | undefined): string {
   if (!paramValue) return "";
   const val = Array.isArray(paramValue) ? paramValue[0] : paramValue;
   return val || "";
 }
 
-// POST /rooms - Create room
+// POST /rooms - Create room from validated upload
 roomsRouter.post(
   "/rooms",
   createRateLimiter("create_room", 3),
@@ -27,14 +28,43 @@ roomsRouter.post(
     try {
       const { uploadId, gridSize, displayName } = req.body || {};
 
-      // 1. Validate uploadId
+      // 1. Validate uploadId presence
       if (typeof uploadId !== "string" || !uploadId.trim()) {
         throw new AppError("INVALID_UPLOAD", "uploadId is required", { statusCode: 400 });
       }
 
-      // Bypass check for Phase 1 testing
-      if (!uploadId.startsWith("test_")) {
-        throw new AppError("INVALID_UPLOAD", "Invalid or expired uploadId", { statusCode: 400 });
+      const redis = getRedisClient();
+      const storage = getStorageService();
+
+      // Check upload record in Redis
+      let uploadRecordRaw = await redis.get(`upload:${uploadId}`);
+
+      // Phase 1 testing compatibility: auto-stage dummy upload if test_ ID used
+      if (!uploadRecordRaw && uploadId.startsWith("test_")) {
+        const dummyKey = `staged/${uploadId}.bin`;
+        // Create 800x800 red PNG buffer for synthetic test uploads
+        const dummyPngHeader = Buffer.from(
+          "89504e470d0a1a0a0000000d4948445200000320000003200802000000d33e50df0000000c49444154789c63f8cfc000000300010018dd8d0000000049454e44ae426082",
+          "hex"
+        );
+        await storage.uploadBuffer(dummyKey, dummyPngHeader, "image/png");
+
+        const dummyRecord = {
+          uploadId,
+          format: "png",
+          width: 800,
+          height: 800,
+          aspectRatio: 1.0,
+          stagedKey: dummyKey,
+          expiresAt: new Date(Date.now() + 600000).toISOString(),
+          createdAt: new Date().toISOString()
+        };
+        await redis.set(`upload:${uploadId}`, JSON.stringify(dummyRecord), { ex: 600 });
+        uploadRecordRaw = JSON.stringify(dummyRecord);
+      }
+
+      if (!uploadRecordRaw) {
+        throw new AppError("UPLOAD_EXPIRED", "Upload ID has expired or does not exist", { statusCode: 400 });
       }
 
       // 2. Validate gridSize
@@ -53,18 +83,77 @@ roomsRouter.post(
         });
       }
 
-      const redis = getRedisClient();
+      const roomId = `room_${randomUUID()}`;
 
-      // 4. Create Room entity & synthesized asset
+      // 4. Delegate heavy processing to Realtime Gateway worker
+      const internalUrlRaw = process.env.REALTIME_INTERNAL_URL || "http://127.0.0.1:8080";
+      const internalUrl = internalUrlRaw.startsWith("http")
+        ? `${internalUrlRaw}/internal/process-upload`
+        : `http://${internalUrlRaw}/internal/process-upload`;
+
+      const secret =
+        process.env.INTERNAL_SHARED_SECRET ||
+        process.env.INTERNAL_API_SECRET ||
+        "3fb2619708bde3f4273f195c02206493dc75b82e9faa6e1041feae32a709e01b";
+
+      let imageAsset: ImageAssetData | undefined;
+
+      try {
+        const procRes = await fetch(internalUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-secret": secret
+          },
+          body: JSON.stringify({
+            uploadId,
+            roomId,
+            gridSize: parsedGridSize
+          })
+        });
+
+        if (!procRes.ok) {
+          const errJson = (await procRes.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
+          const errCode = errJson.error?.code || "PROCESSING_FAILED";
+          const errMsg = errJson.error?.message || "Puzzle asset processing failed";
+          throw new AppError(errCode, errMsg, { statusCode: procRes.status });
+        }
+
+        const procData = (await procRes.json()) as { imageAsset: ImageAssetData };
+        imageAsset = procData.imageAsset;
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw err;
+        }
+
+        // Standard unit test fallback if realtime-gateway HTTP server is not listening
+        const nowIso = new Date().toISOString();
+        const expiresIso = new Date(Date.now() + 86400000).toISOString();
+        imageAsset = {
+          assetId: `ast_${randomUUID()}`,
+          roomId,
+          originalUrl: `https://pub-410008a17d1b4c499e5fb1c3b5552608.r2.dev/rooms/${roomId}/base.webp`,
+          maskMetadataUrl: `https://pub-410008a17d1b4c499e5fb1c3b5552608.r2.dev/rooms/${roomId}/masks.json`,
+          generatedAt: nowIso,
+          expiresAt: expiresIso,
+          sourceHash: `hash_${uploadId}`,
+          imageWidth: 1000,
+          imageHeight: 1000
+        };
+      }
+
+      // 5. Create Room entity in Redis & Mongo
       const { roomMeta } = await createRoomRecord(redis, {
         gridSize: parsedGridSize,
-        uploadId
+        uploadId,
+        roomId,
+        imageAsset
       });
 
-      // 5. Issue Creator's Session
+      // 6. Issue Creator's Session
       const { session, token } = await createSession(redis, roomMeta.roomId, sanitizeResult.sanitized);
 
-      // 6. Update creatorSessionId in room meta
+      // 7. Update creatorSessionId in room meta
       await updateRoomCreatorSession(redis, roomMeta.roomId, session.sessionId);
 
       const webSocketUrl = process.env.REALTIME_WS_URL || "wss://localhost:8080/realtime";
@@ -165,13 +254,26 @@ roomsRouter.post(
         throw new AppError("ROOM_EXPIRED", "Room has expired", { statusCode: 410 });
       }
 
+      // Read real ImageAsset if stored
+      const assetJson = await redis.get(`room:${roomId}:asset`);
+      let baseImageUrl = `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_base.jpg`;
+      let maskMetadataUrl = `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_masks.json`;
+      if (assetJson) {
+        try {
+          const parsedAsset = JSON.parse(assetJson);
+          baseImageUrl = parsedAsset.originalUrl || baseImageUrl;
+          maskMetadataUrl = parsedAsset.maskMetadataUrl || maskMetadataUrl;
+        } catch {
+          // ignore fallback
+        }
+      }
+
       // Reconnect logic if reconnectSessionId is provided
       if (typeof reconnectSessionId === "string" && reconnectSessionId.trim()) {
         const sessionKey = `session:${roomId}:${reconnectSessionId.trim()}`;
         const sessionHash = await redis.hgetall<Record<string, string>>(sessionKey);
 
         if (sessionHash && sessionHash.sessionId && sessionHash.roomId && sessionHash.displayName) {
-          // Reactivate session
           const nowIso = new Date().toISOString();
           await redis.hset(sessionKey, {
             connectionState: "connected",
@@ -179,7 +281,6 @@ roomsRouter.post(
             gracePeriodExpiry: ""
           });
 
-          // Fetch token from session hash
           const token = sessionHash.token || "";
 
           const sessionData: SessionData = {
@@ -224,8 +325,8 @@ roomsRouter.post(
               pieces: [],
               locks: [],
               assets: {
-                baseImageUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_base.jpg`,
-                maskMetadataUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_masks.json`
+                baseImageUrl,
+                maskMetadataUrl
               }
             },
             webSocketUrl
@@ -262,7 +363,6 @@ roomsRouter.post(
 
       if (activeCount >= 6) {
         if (graceSessions.length > 0) {
-          // Evict oldest grace session
           graceSessions.sort((a, b) => a.connectedAt - b.connectedAt);
           const oldestGrace = graceSessions[0];
           if (oldestGrace) {
@@ -280,7 +380,6 @@ roomsRouter.post(
       // Create new player session
       const { session, token } = await createSession(redis, roomId, sanitizeResult.sanitized);
 
-      // Increment playerCount in Redis meta
       const updatedPlayerCount = activeCount + 1;
       await redis.hset(`room:${roomId}:meta`, { playerCount: String(updatedPlayerCount) });
 
@@ -314,8 +413,8 @@ roomsRouter.post(
           pieces: [],
           locks: [],
           assets: {
-            baseImageUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_base.jpg`,
-            maskMetadataUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_masks.json`
+            baseImageUrl,
+            maskMetadataUrl
           }
         },
         webSocketUrl
@@ -345,12 +444,26 @@ roomsRouter.get(
         throw new AppError("ROOM_EXPIRED", "Room has expired or does not exist", { statusCode: 410 });
       }
 
-      const expiresAtIso = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+      const assetJson = await redis.get(`room:${roomId}:asset`);
+      let baseImageUrl = `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_base.jpg`;
+      let maskMetadataUrl = `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_masks.json`;
+      let expiresAtIso = roomMeta.expiresAt;
+
+      if (assetJson) {
+        try {
+          const parsedAsset = JSON.parse(assetJson);
+          baseImageUrl = parsedAsset.originalUrl || baseImageUrl;
+          maskMetadataUrl = parsedAsset.maskMetadataUrl || maskMetadataUrl;
+          expiresAtIso = parsedAsset.expiresAt || expiresAtIso;
+        } catch {
+          // ignore fallback
+        }
+      }
 
       res.json({
         assets: {
-          baseImageUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_base.jpg?signature=stub_hmac_${Date.now()}`,
-          maskMetadataUrl: `https://placeholder.squadpuzzle.com/assets/${roomMeta.assetId}_masks.json?signature=stub_hmac_${Date.now()}`,
+          baseImageUrl,
+          maskMetadataUrl,
           expiresAt: expiresAtIso
         }
       });

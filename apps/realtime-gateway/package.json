@@ -12,12 +12,18 @@
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^24.3.0",
+    "@types/sharp": "^0.31.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1101.0",
+    "@squadpuzzle/shared-types": "*",
+    "@upstash/redis": "^1.38.1",
     "express": "^5.1.0",
+    "mongodb": "^7.5.0",
+    "sharp": "^0.35.3",
     "ws": "^8.18.3"
   }
 }

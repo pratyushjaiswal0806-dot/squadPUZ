@@ -38,12 +38,13 @@ export async function createRoomRecord(
   redis: RedisStore,
   params: {
     gridSize: number;
-    creatorSessionIdPlaceholder?: string;
     uploadId: string;
+    roomId?: string;
+    imageAsset?: ImageAssetData;
   }
 ): Promise<{ roomMeta: RoomMeta; imageAsset: ImageAssetData }> {
   const { gridSize, uploadId } = params;
-  const roomId = `room_${randomUUID()}`;
+  const roomId = params.roomId || `room_${randomUUID()}`;
   const code = await generateUniqueRoomCode(redis, roomId);
 
   const nowMs = Date.now();
@@ -53,10 +54,9 @@ export async function createRoomRecord(
   const expiresIso = new Date(expiresMs).toISOString();
 
   const pieceCount = gridSize * gridSize;
-  const assetId = `asset_${randomUUID()}`;
 
-  const imageAsset: ImageAssetData = {
-    assetId,
+  const imageAsset: ImageAssetData = params.imageAsset || {
+    assetId: `asset_${randomUUID()}`,
     roomId,
     originalUrl: `https://placeholder.squadpuzzle.com/assets/${uploadId}_base.jpg`,
     maskMetadataUrl: `https://placeholder.squadpuzzle.com/assets/${uploadId}_masks.json`,
@@ -83,7 +83,7 @@ export async function createRoomRecord(
     solveTime: null,
     creatorSessionId: "", // Will be updated once creator session is issued
     idleTimerStartedAt: null,
-    assetId
+    assetId: imageAsset.assetId
   };
 
   const redisKey = `room:${roomId}:meta`;
@@ -107,12 +107,12 @@ export async function createRoomRecord(
   });
   await redis.expire(redisKey, 86400);
 
-  // Store static piece attributes placeholder if needed
+  // Store static piece attributes
   await redis.hset(`room:${roomId}:pieces_static`, { initialized: "true" });
   await redis.expire(`room:${roomId}:pieces_static`, 86400);
 
   // Store asset data in Redis
-  await redis.hset(`asset:${roomId}:${assetId}`, {
+  await redis.hset(`asset:${roomId}:${imageAsset.assetId}`, {
     assetId: imageAsset.assetId,
     roomId: imageAsset.roomId,
     originalUrl: imageAsset.originalUrl,
@@ -123,7 +123,7 @@ export async function createRoomRecord(
     imageWidth: String(imageAsset.imageWidth),
     imageHeight: String(imageAsset.imageHeight)
   });
-  await redis.expire(`asset:${roomId}:${assetId}`, 86400);
+  await redis.expire(`asset:${roomId}:${imageAsset.assetId}`, 86400);
 
   // Mirror to Mongo
   mirrorRoomToMongo({
@@ -135,7 +135,7 @@ export async function createRoomRecord(
     expiresAt: expiresMs,
     gridSize,
     pieceCount,
-    assetId
+    assetId: imageAsset.assetId
   });
 
   return { roomMeta, imageAsset };

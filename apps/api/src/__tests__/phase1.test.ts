@@ -167,15 +167,15 @@ describe("SquadPuzzle Phase 1 - Room Management & Session API", () => {
   });
 
   describe("HTTP Endpoints Integration Tests", () => {
-    it("POST /upload returns 501 NOT_IMPLEMENTED with standard error envelope", async () => {
+    it("POST /upload without image file returns 400 INVALID_UPLOAD with standard error envelope", async () => {
       const res = await fetch(`${baseUrl}/upload`, {
         method: "POST",
         headers: { "Content-Type": "multipart/form-data; boundary=---boundary" }
       });
-      assert.equal(res.status, 501);
+      assert.equal(res.status, 400);
 
       const body = (await res.json()) as ErrorResponse;
-      assert.equal(body.error.code, "NOT_IMPLEMENTED");
+      assert.equal(body.error.code, "INVALID_UPLOAD");
       assert.equal(typeof body.error.message, "string");
       assert.equal(typeof body.error.retryable, "boolean");
     });
@@ -192,7 +192,7 @@ describe("SquadPuzzle Phase 1 - Room Management & Session API", () => {
       assert.equal(body.error.code, "MISSING_IDEMPOTENCY_KEY");
     });
 
-    it("POST /rooms with uploadId not starting with test_ returns 400 INVALID_UPLOAD", async () => {
+    it("POST /rooms with non-existent uploadId returns 400 UPLOAD_EXPIRED", async () => {
       const res = await fetch(`${baseUrl}/rooms`, {
         method: "POST",
         headers: {
@@ -204,7 +204,7 @@ describe("SquadPuzzle Phase 1 - Room Management & Session API", () => {
       assert.equal(res.status, 400);
 
       const body = (await res.json()) as ErrorResponse;
-      assert.equal(body.error.code, "INVALID_UPLOAD");
+      assert.equal(body.error.code, "UPLOAD_EXPIRED");
     });
 
     it("POST /rooms with invalid gridSize returns 400 INVALID_GRID_SIZE", async () => {
